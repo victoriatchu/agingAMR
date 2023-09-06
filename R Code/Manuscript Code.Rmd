@@ -1,0 +1,1308 @@
+---
+title: "The antibiotic resistance reservoir of the lung microbiome expands with age"
+output: figures and tables for the manuscript
+date: "2023-09-05"
+---
+
+## Libraries
+
+```{r packages}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '') # replace with your own directory
+
+library(tidyverse)
+library(vegan)
+library(epiDisplay)
+library(ggpubr) 
+library(rstatix)
+library(patchwork)
+library(viridis)
+library(DESeq2)
+
+diversity <- vegan::diversity
+rename <- dplyr::rename
+count <- dplyr::count
+desc <- dplyr::desc
+
+```
+
+```{r theme}
+
+theme_mine <- function(base_size = 12, base_family = "") {
+  # Starts with theme_grey and then modify some parts
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      legend.position = "top",
+      strip.background = element_blank(),
+      strip.text.x = element_text(size = 18),
+      strip.text.y = element_text(size = 18),
+      axis.text.x = element_text(size=14),
+      axis.text.y = element_text(size=14,hjust=1),
+      axis.ticks =  element_line(colour = "black"), 
+      axis.title.x= element_text(size=16),
+      axis.title.y= element_text(size=16,angle=90),
+      #legend.position = "none", 
+      panel.background = element_blank(), 
+      panel.border =element_blank(), 
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(), 
+      panel.margin = unit(1.0, "lines"), 
+      plot.background = element_blank(), 
+      plot.margin = unit(c(0.5,  0.5, 0.5, 0.5), "lines"),
+      axis.line = element_line(colour = "black")
+    )
+}
+
+theme_set(theme_mine())
+
+```
+
+
+## Input
+
+```{r input files}
+
+# main working files
+
+genecounts <- read.csv(".../Data/amrgenes.csv")
+
+metadata <- read.csv(".../Data/metadata.csv")
+
+microbiome <- read.csv(".../Data/microbiome.csv")
+
+
+```
+
+
+## Resistome Figures
+
+### Figure 1A: mirror bar
+
+
+```{r function}
+
+heatmap_order<-function(genecounts) {
+  
+# age_cohort_ord: factor levels for the heat map based on cohort and num_AMR
+specimen_order <- genecounts %>%
+  group_by(sample_name) %>%
+  slice_head() %>%
+  ungroup() %>%
+  arrange(desc(age_cohort), sample_pc, -num_AMR) %>% # agecohort used to be study_ord
+  mutate(age_cohort_ord = row_number()) %>%
+  select(sample_name, age_cohort_ord)
+
+# AMR_order: create a variable for AMR_gene order
+AMR_genes_order <- as.data.frame(table(genecounts$abx_class, genecounts$gene_name)) %>%
+  filter(Freq!=0) %>%
+  rename(abx_class = Var1,
+         gene_name = Var2) %>%
+  arrange(abx_class,Freq,gene_name) %>%
+  mutate(AMR_order = row_number()) %>%
+  select(gene_name,AMR_order)
+
+# merging order variables back into genecounts
+GC_heatmap <- genecounts %>%
+  left_join(AMR_genes_order, by="gene_name") %>%
+  left_join(specimen_order,by="sample_name")# %>%
+#  mutate(cohort= factor(cohort,
+ #                      levels = c("Intubated Peds",
+  #                                "Intubated Adults")))
+
+# HEATMAP PLOT: ordered on x-axis by age_cohort status and y-axis by gene class
+return(GC_heatmap)
+}
+
+```
+
+
+
+```{r Fig 1A mirror bar}
+
+barplot_data <- heatmap_order(genecounts) %>%
+  group_by(abx_class, gene_name, age_cohort) %>%
+  summarise(count=n()) %>%
+  filter(!is.na(gene_name)) %>%
+  ungroup %>%
+  group_by(abx_class) %>%
+  complete(gene_name, age_cohort) %>%
+  ungroup %>%
+  complete(gene_name, age_cohort) %>%
+  mutate(freq = case_when(age_cohort=="adult" ~ count/88,
+                          age_cohort=="peds" ~ count/261)) %>%
+  mutate_at(vars(count, freq),  replace_na, 0) %>%
+  mutate(neg_count = case_when(age_cohort=="adult" ~ count,
+                               age_cohort=="peds" ~ -count),
+         neg_freq = case_when(age_cohort=="adult" ~ freq,
+                               age_cohort=="peds" ~ -freq)) %>%
+  filter(!(is.na(abx_class) & !is.na(gene_name)))
+
+barplot_data_ord<- barplot_data %>%
+  filter(!is.na(gene_name) & age_cohort=="adult") %>%
+  group_by(abx_class, gene_name) %>%
+  summarise(tot_freq=sum(freq)) %>%
+  arrange(abx_class, desc(tot_freq), gene_name) %>%
+  mutate(order = row_number())
+
+barplot_data <- barplot_data %>%
+  left_join(barplot_data_ord, by=c("abx_class","gene_name")) %>%
+  mutate(age_cohort=case_when(age_cohort=="peds" ~ "Children",
+                              age_cohort=="adult" ~ "Adults"),
+         abx_class=case_when(abx_class=="AGly" ~ "Aminoglycoside",
+                             abx_class=="Bla" ~ "Beta-Lactam",
+                             abx_class=="Fcyn" ~ "Fosfomycin",
+                             abx_class=="Flq" ~ "Fluoroquinolone",
+                             abx_class=="MLS" ~ "Macrolide",
+                             abx_class=="Phe" ~ "Chloramphenicol",
+                             abx_class=="T/S" ~ "TMP-SMX",
+                             abx_class=="Tet" ~ "Tetracycline")) %>%
+  mutate(abx_class = factor(abx_class,levels=c("Beta-Lactam","Aminoglycoside","Macrolide","Tetracycline","Fluoroquinolone","Chloramphenicol",
+                                                                                   "TMP-SMX",
+                                                                                   "Fosfomycin")))
+
+AMR_count <- ggplot(barplot_data %>% mutate(labels = if_else(age_cohort=="Children", "", paste(" ",gene_name))),
+                  aes(x=reorder(gene_name,order), y=neg_freq, group=abx_class, fill=abx_class, alpha=age_cohort)) + 
+  scale_fill_viridis(discrete=TRUE) + 
+  geom_bar(stat="identity", position="stack") + 
+  geom_hline(aes(yintercept=0), linetype = "solid", color = "black") +
+  facet_grid(cols = vars(abx_class), scales = "free", space="free", switch = "y") +
+  scale_alpha_manual(values=c(1, 0.5)) +
+  guides(alpha="none", fill=guide_legend("", nrow = 1)) + 
+  geom_text(aes(label = labels, angle=90, hjust = 0), size=3) +
+  ylab("Frequency\n") + xlab("Antimicrobial Resistance Gene") +
+  theme(panel.spacing = unit(0.3,"lines"),
+          axis.ticks.x = element_blank(),
+          axis.line.x = element_blank(),
+          axis.text.y = element_text(size = 10),
+          axis.text.x = element_blank(),
+          strip.text.x = element_blank(),
+        axis.title.x = element_text(margin = margin(t = -20)),
+          legend.position = "top",
+          legend.text = element_text(size=8)) +
+  scale_y_continuous(limits=c(-0.06,0.08), breaks=seq(-0.06,0.08, by = 0.02), expand = expansion(mult=c(0,0.15)), labels=function(x) percent(abs(x)))
+
+AMR_count
+
+```
+
+### Figure 1B: number of AMR genes
+
+```{r Fig 1B age cat and num AMR genes}
+
+Fig1B <- metadata %>%
+  mutate(age_group = factor(age_group,
+                        levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80")),
+         age_cohort = factor(age_cohort,
+                             levels = c("peds","adult")))
+
+stat.test <- Fig1B %>%
+  wilcox_test(num_AMR ~ age_group) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance("p") %>%
+  add_xy_position(x = "age_group", dodge = 0.8) %>%
+  mutate(y.position = 1+ row_number()*0.5,
+         p_text=case_when(p.adj<0.001 ~ "<0.001",
+                          TRUE ~ paste("=", round(p.adj, digits=3)))) %>%
+  filter(p.adj.signif!="ns")
+
+Fig1B_plot <- ggplot(data = Fig1B, aes(x=age_group, y=num_AMR, color=age_cohort)) +
+                geom_jitter(position = position_jitter(seed = 1, width = 0.15, height=0.2), alpha=0.6, size=3) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA) + 
+                coord_cartesian(ylim=c(-0.5, 10),) +
+                scale_y_continuous(breaks=seq(0, 10, 2)) +
+                ylab("Number of ARGs") + labs(color="") +
+                scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+                stat_pvalue_manual(stat.test, tip.length = 0, size=4) +
+                xlab("\nAge group (years)") +
+                geom_hline(aes(yintercept=0)) + 
+                theme(axis.line.x = element_blank(), axis.ticks.x = element_blank(),
+                      legend.position = c(0.5,0.95),
+                      legend.direction="horizontal",
+                      legend.text = element_text(size=12))
+
+Fig1B_plot
+
+```
+
+### Figure 1C: number of AMR classes
+
+```{r Fig 1C age cat and num AMR classes}
+
+Fig1C <- metadata %>%
+  mutate(age_group = factor(age_group,
+                        levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80")),
+         age_cohort = factor(age_cohort,
+                             levels = c("peds","adult")))
+
+stat.test <- Fig1C %>%
+  wilcox_test(num_abx_class ~ age_group) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance("p") %>%
+  add_xy_position(x = "age_group", dodge = 0.8) %>%
+  filter(p.adj.signif!="ns") %>%
+  mutate(y.position = (y.position-4)*0.7,
+         p_text=case_when(p.adj<0.001 ~ "<0.001",
+                          TRUE ~ paste("=", round(p.adj, digits=3))))
+
+Fig1C_plot <- ggplot(data = Fig1C, aes(x=age_group, y=num_abx_class, color=age_cohort)) +
+                geom_jitter(position = position_jitter(seed = 1, width = 0.15, height=0.2), alpha=0.6, size = 3) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA) + 
+                scale_y_continuous(breaks=seq(0, 8, 2), limits=c(0, 8)) + ylab("Number of ARG classes\n") + labs(color="") +
+                scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+                stat_pvalue_manual(stat.test, tip.length = 0, size=6) + 
+                xlab("\nAge group (years)") +
+                geom_hline(aes(yintercept=0)) + 
+                theme(axis.line.x = element_blank(), axis.ticks.x = element_blank(),
+                      legend.position = c(0.5,0.95),
+                      legend.direction="horizontal",
+                      legend.text = element_text(size=12))
+Fig1C_plot
+
+```
+
+### Figure 1D: frequency of presence of an AMR gene by class
+Also data for supplemental table 2
+
+```{r Fig 1D part 1 freq of cohort with ARG class}
+
+metadata_adults <- metadata %>% filter(age_cohort=="adult")
+metadata_peds <- metadata %>% filter(age_cohort=="peds")
+
+prop_abx_class <- metadata %>%
+  select(age_cohort, abx_tet:abx_rif) %>%
+  group_by(age_cohort) %>%
+  summarise(Aminoglycoside=sum(abx_agly),
+            Bla=sum(abx_bla),
+            Fosfomycin=sum(abx_fcyn),
+            Fluoroquinolone=sum(abx_flq),
+            Macrolide=sum(abx_mls),
+            Chloramphenicol=sum(abx_phe),
+            Ts=sum(abx_ts),
+            Tetracycline=sum(abx_tet),
+            ) %>%
+  pivot_longer(cols = c("Aminoglycoside", "Bla", "Fluoroquinolone", "Macrolide", "Chloramphenicol", "Ts", "Tetracycline", "Fosfomycin"),
+               names_to = "abx_class", values_to = "num") %>%
+  mutate(abx_class = case_when(abx_class=="Ts" ~ "TMP-SMX",
+                               abx_class=="Bla" ~ "Beta-Lactam",
+                               TRUE ~ abx_class),
+         denom = case_when(age_cohort=="peds" ~ 261,
+                           age_cohort=="adult" ~ 88), 
+         prop = round(num / denom, digits=2),
+         age_cohort = case_when(age_cohort =="adult" ~ "Adults",
+                                age_cohort == "peds" ~ "Children",
+                                TRUE~NA_character_)) %>% #,
+#         mv_status = "Intubated") %>%
+  rowwise %>%
+    mutate(conf.low = binom.test(num, denom, conf.level = 0.95)$conf.int[1],
+           conf.high = binom.test(num, denom, conf.level = 0.95)$conf.int[2]) %>%
+  mutate(diff=denom-num) %>%
+  arrange(abx_class, age_cohort)
+
+# statistical testing comparing the proportion of presence/absence of abx type between children and adults
+prop_abx_class_stat <- metadata %>%
+  select(age_cohort, abx_tet:abx_ts, abx_fcyn) %>%
+  pivot_longer(cols = c("abx_agly", "abx_bla", "abx_flq", "abx_mls", "abx_phe", "abx_ts", "abx_tet", "abx_fcyn"),
+               names_to = "abx_class", values_to = "num")
+
+stat.test <- prop_abx_class_stat %>%
+  mutate(abx_class = factor(abx_class, levels=c("abx_fcyn","abx_ts","abx_phe","abx_flq","abx_tet","abx_mls","abx_agly","abx_bla"))) %>%
+  group_by(abx_class) %>%
+  wilcox_test(num ~ age_cohort) %>%
+  add_significance("p") %>%
+  add_xy_position(x = "abx_class", dodge = 0.8) %>%
+  select(-y.position)
+
+AGly<- (prop.test(x = (prop_abx_class %>% filter(abx_class=="Aminoglycoside") %>% select(num, age_cohort))[[1]], n = c(nrow(metadata_adults), nrow(metadata_peds)),alternative = "two.sided"))$p.value
+Bla<- (prop.test(x = (prop_abx_class %>% filter(abx_class=="Beta-Lactam") %>% select(num, age_cohort))[[1]], n = c(nrow(metadata_adults), nrow(metadata_peds)),alternative = "two.sided"))$p.value
+MLS<- (prop.test(x = (prop_abx_class %>% filter(abx_class=="Macrolide") %>% select(num, age_cohort))[[1]], n = c(nrow(metadata_adults), nrow(metadata_peds)),alternative = "two.sided"))$p.value
+Phe<- (prop.test(x = (prop_abx_class %>% filter(abx_class=="Chloramphenicol") %>% select(num, age_cohort))[[1]], n = c(nrow(metadata_adults), nrow(metadata_peds)),alternative = "two.sided"))$p.value
+Tet<- (prop.test(x = (prop_abx_class %>% filter(abx_class=="Tetracycline") %>% select(num, age_cohort))[[1]], n = c(nrow(metadata_adults), nrow(metadata_peds)),alternative = "two.sided"))$p.value
+
+Flq_mat <-matrix(c((prop_abx_class %>% filter(abx_class=="Fluoroquinolone") %>% select(num, age_cohort))[[1]],
+                    (prop_abx_class %>% filter(abx_class=="Fluoroquinolone" & age_cohort=="Adults"))$diff,
+                   (prop_abx_class %>% filter(abx_class=="Fluoroquinolone" & age_cohort=="Children"))$diff), nrow = 2)
+Flq<-(fisher.test(Flq_mat))$p.value
+
+Fcyn_mat <-matrix(c((prop_abx_class %>% filter(abx_class=="Fosfomycin") %>% select(num, age_cohort))[[1]],
+                    (prop_abx_class %>% filter(abx_class=="Fosfomycin" & age_cohort=="Adults"))$diff,
+                   (prop_abx_class %>% filter(abx_class=="Fosfomycin" & age_cohort=="Children"))$diff), nrow = 2)
+Fcyn<-(fisher.test(Fcyn_mat))$p.value
+
+TS_mat <-matrix(c((prop_abx_class %>% filter(abx_class=="TMP-SMX") %>% select(num, age_cohort))[[1]],
+                    (prop_abx_class %>% filter(abx_class=="TMP-SMX" & age_cohort=="Adults"))$diff,
+                   (prop_abx_class %>% filter(abx_class=="TMP-SMX" & age_cohort=="Children"))$diff), nrow = 2)
+TS<-(fisher.test(TS_mat))$p.value
+
+stat.test <- stat.test %>%
+  mutate(p = case_when(abx_class=="abx_fcyn" ~ Fcyn,
+                       abx_class=="abx_ts" ~ TS,
+                       abx_class=="abx_flq" ~ Flq,
+                       abx_class=="abx_tet" ~ Tet,
+                       abx_class=="abx_mls" ~ MLS,
+                       abx_class=="abx_phe" ~ Phe,
+                       abx_class=="abx_agly" ~ AGly,
+                       abx_class=="abx_bla" ~ Bla,
+                       TRUE ~ p))
+
+stat.y_position <- prop_abx_class %>%
+  select(abx_class, age_cohort, conf.high) %>%
+  arrange(abx_class, desc(conf.high)) %>%
+  group_by(abx_class) %>%
+  slice_head() %>%
+  mutate(y.position = conf.high+0.05,
+         abx_class = case_when(abx_class=="Aminoglycoside" ~ "abx_agly",
+                               abx_class=="Beta-Lactam" ~ "abx_bla", 
+                               abx_class=="Fluoroquinolone" ~ "abx_flq", 
+                               abx_class=="Macrolide" ~ "abx_mls", 
+                               abx_class=="Chloramphenicol" ~ "abx_phe", 
+                               abx_class=="TMP-SMX" ~ "abx_ts", 
+                               abx_class=="Tetracycline" ~ "abx_tet", 
+                               abx_class=="Fosfomycin" ~ "abx_fcyn"))
+
+stat.test <- stat.test %>%
+  left_join(stat.y_position, by = "abx_class") %>%
+  mutate(#mv_status="Intubated",
+         p_text = case_when(p<0.001 ~ "p <0.01",
+                            TRUE ~ paste("p = ", round(p, digits=2), sep="")))
+```
+
+
+```{r Fig 1D plot}
+
+# plot
+Fig1D <- ggplot(data = prop_abx_class %>%
+                        mutate(abx_class = factor(abx_class,levels=c("Fosfomycin","TMP-SMX","Chloramphenicol","Fluoroquinolone",
+                                                                     "Tetracycline","Macrolide","Aminoglycoside",
+                                                                     "Beta-Lactam"))),
+                      aes(x=abx_class, y=prop, color = age_cohort)) +
+  geom_point(aes(color = age_cohort), stat="summary", fun=median, size=4, position = position_jitterdodge(0,0,0.6)) +
+  geom_errorbar(aes(ymin=conf.low, ymax=conf.high), width=.2, position = position_jitterdodge(0,0,0.6)) +
+  coord_flip(clip = "off") + 
+  ylab("\nProportion of patients (%)") + xlab(NULL) + labs(color="") +
+  scale_y_continuous(labels = percent, limits=c(0,0.52), expand=c(0,0)) +
+  scale_color_manual(breaks=c('Children','Adults'), labels=c('Children', 'Adults'), values=c("#004058","#7c1730")) +
+  stat_pvalue_manual(stat.test,  label = "p_text", tip.length = 0, coord.flip = TRUE, angle = 0,
+                     bracket.size=0, size=4) +
+  theme(axis.text.x = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        legend.position = c(0.8, 0.3),
+        legend.text = element_text(size=12),
+        axis.title= element_text(size=12))
+
+Fig1D
+
+```
+
+### Figure 1E: resistome beta diversity
+
+```{r Fig 1E beta diversity}
+
+beta_div_metadata<- metadata %>%
+  filter(AMR_yn==1) %>%
+  select(sample_name, age_cohort) %>%
+  distinct()
+
+beta_diversity_genes<- genecounts %>%
+  filter(AMR_yn==1) %>%
+  select(sample_name, allele_name, total_reads, AMR_yn)  %>%
+  pivot_wider(names_from = "allele_name", values_from = "total_reads") %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~age_cohort, data=beta_div_metadata, permutations = 1000, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_dist, distance="bray", k=3, trymax=35, autotransform=TRUE)
+MDS
+
+NMDS1 <- MDS$points[,1]
+NMDS2 <- MDS$points[,2]
+plot<-cbind(beta_div_metadata, NMDS1, NMDS2)
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ age_cohort, data = beta_div_metadata, FUN = mean)
+segs <- merge(plot, setNames(cent, c('age_cohort','oNMDS1','oNMDS2')),
+              by = 'age_cohort', sort = FALSE)
+
+amr_betadiv<-ggplot(plot %>% mutate(age_cohort=factor(age_cohort, levels=c("peds","adult"))),
+          aes(NMDS1, NMDS2, color=age_cohort)) +
+  geom_point() +
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+  scale_fill_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+  annotate("text", x=-0.8, y=-0.5, label="Children", hjust = 0, color=c("#004058"), size=6) + 
+  annotate("text", x=0.8, y=-0.8, label="Adults", hjust = 0, color=c("#7c1730"), size=6) + 
+  annotate("text", x=-1, y=-1.5, label=paste('PERMANOVA\np-value 0.003'), hjust = 0, size=6) + 
+                theme(legend.position="none")
+amr_betadiv
+
+
+```
+
+
+### Supplemental Figure 1
+
+```{r Supp Fig 1: frequency of presence of AMR gene by class by age categories}
+
+plot_data <- metadata %>%
+  select(age_group, abx_tet:abx_rif) %>%
+  group_by(age_group) %>%
+  summarise(total=n(), tet = sum(abx_tet), bla = sum(abx_bla), agly=sum(abx_agly), mls=sum(abx_mls),
+            phe=sum(abx_phe), flq=sum(abx_flq), ts=sum(abx_ts), fcyn=sum(abx_fcyn), rif=sum(abx_rif)) %>%
+  pivot_longer(cols=tet:rif) %>%
+  mutate(freq=value/total) %>%
+  filter(name!="rif") %>%
+  mutate(age_group = factor(age_group, levels = c("0-2","3-10", "11-18", "19-39", "40-49", "50-59", "60-69", "70-79", ">=80"))) %>%
+  group_by(age_group, name) %>%
+  mutate(lowerCI = binom.test(value, total, conf.level = 0.95)$conf.int[1],
+         upperCI = binom.test(value, total, conf.level = 0.95)$conf.int[2],
+         age_cohort = case_when(age_group %in% c("0-2","3-10","11-18") ~ "Children",
+                                TRUE ~ "Adults")) %>%
+  ungroup() %>%
+  mutate(name = case_when(name=="bla" ~ "Beta-Lactam",
+                          name=="agly" ~ "Aminoglycoside",
+                          name=="mls" ~ "Macrolide",
+                          name=="tet" ~ "Tetracycline",
+                          name=="flq" ~ "Fluoroquinolone",
+                          name=="phe" ~ "Chloramphenicol",
+                          name=="ts" ~ "TMP-SMX",
+                          name=="fcyn" ~ "Fosfomycin"))
+
+plot <- ggplot(plot_data, aes(x=age_group, y=freq, group=name, color=age_cohort)) +
+  geom_line() + geom_point() + facet_wrap(.~name, nrow=2) +
+  geom_ribbon(aes(ymin=lowerCI, ymax=upperCI), color=NA, alpha=0.1) +
+  scale_color_manual(breaks=c('Children','Adults'), labels=c('Children', 'Adults'), values=c("#004058","#7c1730")) +
+  scale_y_continuous(labels = percent, limits=c(0,0.8), expand=c(0,0)) +
+  labs(color="") +
+  ylab("Proportion of patients (%)\n") + xlab("\nAge group (years)") +
+  theme(axis.text.x = element_text(size=6, angle=90),
+        axis.text.y = element_text(size=8),
+        strip.text.x = element_text(size=8),
+  #      legend.position = c(0.85, 0.05),
+        legend.text = element_text(size=8),
+        axis.title.x= element_text(size=8),
+  axis.title.y= element_text(size=8))
+
+plot
+
+```
+
+
+### Supplemental Figure 2A
+
+```{r Supp Figure 2A: alpha diversity by cohort}
+
+
+stat.test <- metadata %>%
+  wilcox_test(SDI_AMR_dpm ~ age_cohort) %>%
+  add_significance("p") %>%
+  add_xy_position(x = "group", dodge = 0.8) %>%
+  mutate(p_new= case_when(p<0.01 ~ "<0.01",
+                          TRUE ~ as.character(p)),
+         xmin=1, xmax=2,
+         y.position=2.8)
+
+SDI_genes <- ggplot(data = metadata %>% mutate(age_cohort = factor(age_cohort,levels = c("peds","adult"))),
+                   aes(x=age_cohort, y=SDI_AMR_dpm, color = age_cohort)) +
+                geom_point(position = position_jitterdodge(0.5,0.05,0.7), alpha=0.6, size=3) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA, width=0.8) +
+                coord_cartesian(ylim=c(0, 3), clip="off") +
+                scale_y_continuous(breaks=seq(0, 3, 1), limits=c(-0.2, 3), expand=c(0,0)) +
+                xlab(NULL) + ylab("ARG Shannon Diversity Index\n") + labs(color=NULL) +
+                guides(fill = FALSE) +
+                scale_color_manual(labels=c('Children', 'Adults'), values=c("#004058","#7c1730")) +
+                stat_pvalue_manual(stat.test,  label = "p{p_new}", tip.length = 0, size=4) + 
+                theme(legend.text = element_text(size=12),
+                      legend.direction="horizontal",
+                      legend.position = "top")
+
+SDI_genes
+
+
+```
+
+
+### Supplemental Figure 2B
+
+```{r Supp Figure 2B: alpha diversity by age group}
+
+SDI_agegroup <- ggplot(data = metadata %>% mutate(age_cohort = factor(age_cohort,levels = c("peds","adult")),
+                                                  age_group = factor(age_group,levels =
+                                                                  c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80"))),
+                   aes(x=age_group, y=SDI_AMR_dpm, color = age_cohort)) +
+                geom_point(position = position_jitterdodge(0.5,0.05,0.7), alpha=0.6, size=3) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA) +
+                coord_cartesian(ylim=c(0, 2.5), clip="off") +
+                scale_y_continuous(breaks=seq(0, 2.5, 0.5), limits=c(-0.1, 2.5)) +
+                xlab("\n Age group (years)") + ylab("ARG Shannon Diversity Index\n") + labs(color=NULL) +
+                guides(fill = FALSE) +
+                scale_color_manual(labels=c('Children', 'Adults'), values=c("#004058","#7c1730")) +
+                geom_hline(aes(yintercept=0)) + 
+                theme(legend.text = element_text(size=12),
+                      legend.direction="horizontal",
+                      legend.position = c(0.5,0.95),
+                      axis.line.x = element_blank(),
+                      axis.ticks.x = element_blank())
+
+SDI_agegroup
+
+
+```
+
+### Supplemental Figure 3
+
+```{r SuppFig1 intubated mirror bar on Blas}
+
+barplot_data_bla <- barplot_data %>%
+  filter(abx_class=="Beta-Lactam") %>%
+  mutate(amr_interest = case_when(gene_name %in% c("SHV-OKP-LEN","L-1","VEB-1","DHA-1","Oxa-22","ROB-1", "OXA-2") ~ "ESBL",
+                                  gene_name %in% c("OXA-50","OXA-60") ~ "Carbapenemase",
+                                  gene_name %in% c("AmpC","AmpC2","ACT-MIR","CMY","SRT-SST","DHA") ~ "AmpC",
+                                  TRUE ~ NA_character_))
+
+AMR_count_int_bla <- ggplot(barplot_data_bla %>% mutate(labels = if_else(age_cohort=="Children", "", paste(" ",gene_name))),
+                  aes(x=reorder(gene_name,order), y=neg_freq, fill=amr_interest, alpha=age_cohort)) + 
+  scale_fill_manual(values = c("#440154FF","#33638DFF","#29AF7FFF"), na.value="gray", limits=c("AmpC","Carbapenemase", "ESBL")) +
+  geom_bar(stat="identity", position="stack") + 
+  geom_hline(aes(yintercept=0), linetype = "solid", color = "black") +
+  scale_alpha_manual(values=c(1, 0.5)) +
+  geom_text(aes(label = labels, angle=90, hjust = 0)) +
+  guides(alpha="none", fill=guide_legend("")) +
+  labs(fill="AMR") +
+  ylab("Frequency\n") + xlab("Beta-lactam ARG") +
+  theme(panel.spacing = unit(0.3,"lines"),
+          axis.ticks.x = element_blank(),
+          axis.line.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.text.x = element_blank(),
+          strip.text.x = element_blank(),
+          legend.position = "top",
+          legend.text = element_text(size=12)) +
+  scale_y_continuous(limits=c(-0.06,0.08), breaks=seq(-0.06,0.08, by = 0.02), expand = expansion(mult=c(0,0.15)), labels=function(x) percent(abs(x)))
+
+AMR_count_int_bla
+
+```
+
+
+## Resistome Log Regressions Models
+
+### Figure 2A: logistic regression of binary age
+
+```{r Fig 2A: logistic regression of binary age}
+
+# forest plot of peds vs adults
+mult_forest_plot_data <- logistic.display(glm(formula = AMR_yn ~ age_cohort + new_LRTI_onset_ind + sex + raceeth + ETT_day_groups,
+                                              family = binomial(link = "logit"),
+                                              data = metadata %>% mutate(ETT_day_groups = factor(ETT_day_groups, levels=c("<=1","2","3")),
+                                                                         age_cohort = factor(age_cohort, levels=c("peds","adult")),
+                                                                         new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","CAP","HAP")),
+                                                                         sex = factor(sex, levels = c("Male","Female")),
+                                                                         raceeth = factor(raceeth,levels=c("Non-Hispanic White", "Hispanic White", "Black or African American","Asian","Other")))))
+
+res_plot <- as.data.frame(mult_forest_plot_data$table) %>%
+  rename(p.value=`P(Wald's test)`,
+         aOR=`adj. OR(95%CI)`) %>%
+  select(aOR, p.value) %>%
+  mutate(model= c("Age (adults vs children)",
+                  "","    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI", "", "Sex (female vs male)",
+                  "", "    Non-Hispanic White (ref)","    Hispanic White","    Black", "    Asian", "    Other",
+                  "", "    <=1 day (ref)", "    2 days", "    3 days",""),
+         estimate = format(round(as.numeric(str_extract(aOR, ".+?(?= ())")), digits=2), nsmall=2),
+         conf.low = format(round(as.numeric(gsub(".*\\((.*)\\,.*", "\\1", aOR)), digits=2), nsmall=2),
+         conf.high = format(round(as.numeric(gsub(".*,(.*)\\).*", "\\1", aOR)), digits=2),  nsmall=2)) %>%
+  filter(model!="") %>%
+  mutate(estimate_lab = case_when(!is.na(estimate) ~ paste0(estimate, " (", conf.low, "-", conf.high,")"),
+                                  TRUE ~ "           ---"),
+         p.value = case_when(p.value!="" ~ p.value,
+                             p.value=="" ~ " ---")) %>%
+  mutate(estimate_lab = case_when(estimate_lab=="  NA (  NA-   NA)" ~  "           ---",
+                                  TRUE ~ estimate_lab)) %>%
+  bind_rows(data.frame(model = "Characteristic", estimate_lab = "aOR (95% CI)", conf.low = NA, conf.high=NA,p.value="p-value")) %>%
+  bind_rows(data.frame(model = "Intubation to specimen collection (days)", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  bind_rows(data.frame(model = "Race/Ethnicity", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  bind_rows(data.frame(model = "LRTI Status", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  mutate(estimate=as.numeric(estimate),
+         conf.low=as.numeric(conf.low),
+         conf.high=as.numeric(conf.high),
+         model = factor(model, c("Characteristic",
+                                 "Age (adults vs children)",
+                                 "Sex (female vs male)",
+                                 "Race/Ethnicity",
+                                 "    Non-Hispanic White (ref)","    Hispanic White","    Black", "    Asian", "    Other",
+                                 "LRTI Status",
+                                 "    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI",
+                                 "Intubation to specimen collection (days)", "    <=1 day (ref)", "    2 days", "    3 days")))
+
+
+## plotting
+## ---------------------------
+# create forest plot on log scale (middle section of figure)
+p_mid <- ggplot(res_plot, aes(y = reorder(model, desc(model)))) + 
+  geom_point(aes(x=estimate), shape=15, size=3) +
+  geom_linerange(aes(xmin=conf.low, xmax=conf.high)) +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  labs(x="adjusted odds ratio (aOR)", y="") +
+  coord_cartesian(ylim=c(1,18), xlim=c(0, 6)) +
+  scale_x_continuous(breaks = seq(0,6, by=1)) +
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank())
+
+# left side of plot - aOR
+p_left <- ggplot(res_plot, aes(y = reorder(model,desc(model)))) + 
+  geom_text(aes(x=0, label=model), hjust=0, fontface = "bold", size=6) +
+  geom_text(aes(x=1, label=estimate_lab), hjust=0, fontface = ifelse(res_plot$estimate_lab == "aOR (95% CI)", "bold", "plain"), size=6) +
+  theme_void() +
+  coord_cartesian(xlim=c(0,2))
+
+# right side of plot - pvalues
+p_right <- ggplot(res_plot) +
+  geom_text(aes(x=0, y = reorder(model,desc(model)), label=p.value), hjust=0, fontface = ifelse(res_plot$p.value == "p-value", "bold", "plain"), size=6) +
+  theme_void() 
+
+# layout design (top, left, bottom, right)
+layout <- c(
+  area(t = 0, l = 0, b = 30, r = 20), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+  area(t = 0, l = 18, b = 30, r = 28), # middle plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  area(t = 0, l = 28, b = 30, r = 35)) # right most plot starts at top of page, begins where middle plot ends (l=9, and middle plot is r=9), goes to bottom of page (b=30), and extends two units wide (r=11)
+
+# final plot arrangement
+forest_plot <- p_left + p_mid + p_right + plot_layout(design = layout)
+
+```
+
+
+### Figure 2B: logistic regression of age groups
+
+```{r Fig 2B}
+
+# forest plot across all ages
+mult_forest_plot_data <- logistic.display(glm(formula = AMR_yn ~ age_group + new_LRTI_onset_ind + sex + raceeth + ETT_day_groups, family = binomial(link = "logit"),
+                                              data = metadata %>% mutate(ETT_day_groups = factor(ETT_day_groups, levels=c("<=1","2","3")),
+                                                                         age_group = factor(age_group, levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80")),
+                                                                          new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","CAP","HAP")),
+                                                                         sex = factor(sex, levels = c("Male", "Female")),
+                                                                         raceeth = factor(raceeth,levels=c("Non-Hispanic White", "Hispanic White", "Black or African American","Asian","Other")))))
+
+res_plot <- as.data.frame(mult_forest_plot_data$table) %>%
+  rename(p.value=`P(Wald's test)`,
+         aOR=`adj. OR(95%CI)`) %>%
+  select(aOR, p.value) %>%
+  mutate(model= c("    0-2 years (ref)","    3-10 years", "    11-18 years","    19-39 years",
+                  "    40-49 years","    50-59 years", "    60-69 years","    70-79 years","    >=80 years",
+                  "","    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI","","Sex (female vs male)","", "    Non-Hispanic White (ref)","    Hispanic White","    Black", "    Asian", "    Other", "", "    <=1 day (ref)", "    2 days", "    3 days",""),
+         estimate = format(round(as.numeric(str_extract(aOR, ".+?(?= ())")), digits=2), nsmall=2),
+         conf.low = format(round(as.numeric(gsub(".*\\((.*)\\,.*", "\\1", aOR)), digits=2), nsmall=2),
+         conf.high = format(round(as.numeric(gsub(".*,(.*)\\).*", "\\1", aOR)), digits=2),  nsmall=2)) %>%
+  filter(model!="") %>%
+  mutate(estimate_lab = case_when(!is.na(estimate) ~ paste0(estimate, " (", conf.low, "-", conf.high,")"),
+                                  TRUE ~ "           ---"),
+         p.value = case_when(p.value!="" ~ p.value,
+                             p.value=="" ~ " ---")) %>%
+  mutate(estimate_lab = case_when(estimate_lab=="  NA (  NA-   NA)" ~  "           ---",
+                                  TRUE ~ estimate_lab)) %>%
+  bind_rows(data.frame(model = "Characteristic", estimate_lab = "aOR (95% CI)", conf.low = NA, conf.high=NA,p.value="p-value")) %>%
+  bind_rows(data.frame(model = "Intubation to specimen collection (days)", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  bind_rows(data.frame(model = "Race/Ethnicity", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  bind_rows(data.frame(model = "Age", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  bind_rows(data.frame(model = "LRTI Status", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  mutate(estimate=as.numeric(estimate),
+         conf.low=as.numeric(conf.low),
+         conf.high=as.numeric(conf.high),
+         model = factor(model, c("Characteristic",
+                                 "Age",
+                                 "    0-2 years (ref)","    3-10 years", "    11-18 years","    19-39 years","    40-49 years",
+                                 "    50-59 years", "    60-69 years","    70-79 years","    >=80 years",
+                                 "Sex (female vs male)",
+                                 "Race/Ethnicity",
+                                 "    Non-Hispanic White (ref)","    Hispanic White","    Black", "    Asian", "    Other",
+                                 "LRTI Status",
+                                 "    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI",
+                                 "Intubation to specimen collection (days)", "    <=1 day (ref)", "    2 days", "    3 days")))
+
+
+## plotting
+## ---------------------------
+# create forest plot on log scale (middle section of figure)
+p_mid <- ggplot(res_plot, aes(y = reorder(model, desc(model)))) + 
+  geom_point(aes(x=estimate), shape=15, size=3) +
+  geom_linerange(aes(xmin=conf.low, xmax=conf.high)) +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  labs(x="adjusted odds ratio (aOR)", y="") +
+  coord_cartesian(ylim=c(1,27), xlim=c(0, 10)) +
+  scale_x_continuous(breaks = seq(0,10, by=1)) +
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank())
+
+# left side of plot - aOR
+p_left <- ggplot(res_plot, aes(y = reorder(model,desc(model)))) + 
+  geom_text(aes(x=0, label=model), hjust=0, fontface = "bold", size=6) +
+  geom_text(aes(x=1, label=estimate_lab), hjust=0, fontface = ifelse(res_plot$estimate_lab == "aOR (95% CI)", "bold", "plain"), size=6) +
+  theme_void() +
+  coord_cartesian(xlim=c(0,2))
+
+# right side of plot - pvalues
+p_right <- ggplot(res_plot) +
+  geom_text(aes(x=0, y = reorder(model,desc(model)), label=p.value), hjust=0, fontface = ifelse(res_plot$p.value == "p-value", "bold", "plain"), size=6) +
+  theme_void() 
+
+# layout design (top, left, bottom, right)
+layout <- c(
+  area(t = 0, l = 0, b = 30, r = 20), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+  area(t = 0, l = 18, b = 30, r = 28), # middle plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  area(t = 0, l = 28, b = 30, r = 35)) # right most plot starts at top of page, begins where middle plot ends (l=9, and middle plot is r=9), goes to bottom of page (b=30), and extends two units wide (r=11)
+
+# final plot arrangement
+forest_plot <- p_left + p_mid + p_right + plot_layout(design = layout)
+
+#ggsave("/Users/victoriachu/Documents/Research/AMR peds vs adults COVID/Results/Manuscript/Fig2B_forest_plot.pdf", forest_plot, width=15, height=10)
+
+```
+
+### Supplemental Table 3: logistic regression with continuous age
+
+```{r Supplemental Table 3}
+
+logistic.display(glm(formula = AMR_yn ~ age + sex + raceeth + new_LRTI_onset_ind + ETT_day_groups, family = binomial(link = "logit"),
+                                              data = metadata %>% mutate(ETT_day_groups = factor(ETT_day_groups, levels=c("<=1","2","3")),
+                                                                         new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","CAP","HAP")),
+                                                                         sex = factor(sex, levels = c("Male", "Female")),
+                                                                         raceeth = factor(raceeth,levels=c("Non-Hispanic White", "Hispanic White", "Black or African American","Asian","Other")))))
+
+```
+
+
+### Supplemental Table 4: pediatric cohort only
+
+```{r Supplemental Table 4}
+
+logistic.display(glm(formula = AMR_yn ~ age_group + chronicdx_yn + region, family = binomial(link = "logit"),
+                                              data = metadata %>% filter(age_cohort=="peds") %>%
+                                                    mutate(age_group = factor(age_group, levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80")),
+                                                           chronicdx_yn=factor(chronicdx_yn, levels=c("No","Yes")),
+                                                           region=factor(region, levels=c("Midwest","South","West","Northeast")))))
+
+```
+
+
+
+## Microbiome Figure 3
+
+### Figure 3A: bacterial abundance by age cat
+
+```{r Fig 3A bacterial abundance by age cat}
+
+stat.test <- metadata %>%
+  mutate(sum_rpm=log10(sum_rpm_bact+0.1)) %>%
+  wilcox_test(sum_rpm ~ age_group) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance("p.adj") %>%
+  add_xy_position(x = "category", dodge = 0.8)
+
+bact_abundance_age <- ggplot(data = metadata %>% mutate(age_cohort = factor(age_cohort, levels = c("peds","adult")),
+                                                        age_group = factor(age_group, levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80"))),
+                             aes(x=age_group, y=sum_rpm_bact+0.01, color=age_cohort)) +
+                geom_jitter(position = position_jitter(seed = 1, width = 0.15, height=0.2), alpha=0.6) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA) + 
+                scale_y_continuous(breaks=seq(0, 10, 2), limits=c(-0.5, 10)) + ylab("Bacterial Abundance (log 10 rpm)") + labs(color="") +
+                scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+                scale_y_continuous(trans = log10_trans(),
+                        breaks = trans_breaks('log10', function(x) 10^x),
+                        labels = trans_format('log10', math_format(10^.x))) +
+                xlab("\nAge group (years)") +
+                ylab("Bacterial abundance\nlog(NT rpm +0.01)\n") +
+                geom_hline(aes(yintercept=0)) + 
+                theme(axis.line.x = element_blank(), axis.ticks.x = element_blank(),
+                      legend.position = "top",
+                      legend.text=element_text(size=14),
+                      legend.direction="horizontal")
+
+bact_abundance_age
+
+
+```
+
+
+
+### Figure 3B: bacterial SDI by age cat
+
+```{r Fig 3B bacterial SDI by age cat}
+
+bSDI_agecat <- ggplot(data = metadata %>% 
+                 mutate(age_cohort = case_when(age_cohort=="peds" ~ "Children",
+                                               age_cohort=="adult" ~ "Adults"),
+                         age_group = factor(age_group, levels = c("0-2","3-10","11-18","19-39","40-49","50-59","60-69","70-79",">=80"))) %>%
+                 mutate(age_cohort = factor(age_cohort,levels = c("Children","Adults"))),
+                   aes(x=age_group, y=SDI_bact_reads, color=age_cohort)) +
+                geom_point(position = position_jitterdodge(0.7,0.1,0.7), alpha=0.6, size=4) +
+                geom_boxplot(alpha=0.5, outlier.shape = NA, fill=NA, width=0.6) +
+                scale_y_continuous(breaks=seq(0, 4, 1), limits=c(-0.1, 5), expand=c(0,0)) + 
+                scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+                coord_cartesian(clip = 'off') +
+                xlab("\nAge group (years)") +
+                ylab("Bacterial Shannon Diversity Index\n") + labs(color=NULL) +
+                guides(fill = FALSE) +
+                theme(legend.position = "none")
+bSDI_agecat
+
+
+```
+
+
+
+### Figure 3C: bacterial beta div
+
+
+```{r microbiome beta diversity}
+
+beta_div_metadata<- metadata %>%
+  filter(num_bact!=0) %>%
+  select(sample_name, age_cohort) %>%
+  distinct()
+
+beta_diversity_genes<- microbiome %>%
+  filter(!is.na(name)) %>%
+  select(sample_name, name, nt_count)  %>%
+  pivot_wider(names_from = "name", values_from = "nt_count") %>% 
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes, method="bray")
+
+names <-labels(beta_dist)
+beta_div_metadata <- beta_div_metadata %>% filter(sample_name %in% names)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist ~ age_cohort, data=beta_div_metadata, permutations = 1000, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_dist, distance="bray", k=3, trymax=35, autotransform=TRUE, weakties = FALSE) 
+MDS
+
+NMDS1 <- MDS$points[,1]
+NMDS2 <- MDS$points[,2]
+plot<-cbind(beta_div_metadata, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ age_cohort, data = beta_div_metadata, FUN = mean)
+segs <- merge(plot, setNames(cent, c('age_cohort','oNMDS1','oNMDS2')),
+              by = 'age_cohort', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot %>% mutate(age_cohort=factor(age_cohort, levels=c("peds","adult"))),
+          aes(NMDS1, NMDS2, color=age_cohort)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+  scale_fill_manual(labels=c('Children','Adults'), values=c("#004058","#7c1730")) +
+  annotate("text", x=-1.2, y=1, label="Children", hjust = 0, color=c("#004058"), size=5) + 
+  annotate("text", x=0.5, y=-0.8, label="Adults", hjust = 0, color=c("#7c1730"), size=5) + 
+  annotate("text", x=-1.7, y=-0.8, label=paste('PERMANOVA\np-value = <0.01'), hjust = 0, size=5) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+### Figure 3D: diff expression between children and adults
+
+
+```{r differential expression by age}
+
+#building countData matrix
+counts <- microbiome %>%
+  filter(!is.na(name) & num_bact!=0) %>%
+  rename(orig_name=name) %>%
+  mutate(name = gsub( " .*$", "", orig_name)) %>%
+  group_by(sample_name, genus_tax_id) %>%
+  summarise(sum_nt_count = sum(nt_count)) %>%
+  pivot_wider(id_cols=genus_tax_id, names_from=sample_name, values_from=sum_nt_count) %>%
+  mutate(name=as.character(genus_tax_id)) %>%
+  column_to_rownames("name") %>%
+  select(-genus_tax_id) %>%
+  mutate_if(is.numeric, ~replace_na(., 0))
+
+counts_dds <- counts[, sort(colnames(counts))]
+
+# counting the number of 0s per row and filtering out pathogens that are in >20% of all samples
+counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.8*(ncol(counts_dds))), ]
+
+counts_dds_matrix = as.matrix(counts_dds)
+
+metadata_dds <- metadata %>% filter(sample_name %in% colnames(counts_dds_matrix)) %>%
+  column_to_rownames("sample_name")
+metadata_dds <- metadata_dds[sort(rownames(metadata_dds)),]
+
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) #this needs to be True!!! otherwise you will have mismatches
+
+#building DESeq object
+dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
+                              colData = metadata_dds,
+                              design = ~age_cohort)
+
+c=counts(dds)[rowSums(counts(dds))>0,]
+
+dds=dds[rowSums(counts(dds))>=1,]
+dds$age_cohort = relevel(dds$age_cohort, ref = "peds")
+dds=dds[,colSums(counts(dds))>=1]
+
+ds <- estimateSizeFactors(dds, type="poscounts")
+ds <- DESeq(ds, test="Wald", fitType="parametric")
+
+# Extract differential expression results
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_df = as.data.frame(res)
+
+sig.res <- res[res$padj<0.05,]
+taxa_sig = rownames(res[1:20, ]) # select bottom 20 with lowest p.adj values
+
+sig.res_df <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>%
+  mutate(Genus = case_when(Genus==1350 ~ "Enterococcus spp.",
+                           Genus==816 ~ "Bacteroides spp.",
+                           Genus==286 ~ "Pseudomonas spp.",
+                           Genus==75984 ~ "Mannheimia spp.",
+                           Genus==724 ~ "Haemophilus spp.",
+                           Genus==1279 ~ "Staphylococcus spp.",
+                           Genus==838 ~ "Prevotella spp.",
+                           Genus==475 ~ "Moraxella spp."))
+
+diff_expression_age <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChange>=0 ~ "positive",
+                                                                log2FoldChange<0 ~ "negative")),
+                          aes(x=reorder(Genus,log2FoldChange), y=log2FoldChange, fill=color)) +
+  geom_bar(stat="identity", position="stack") + 
+  annotate("text", x=9, y=0.5, label= "Increased in adults", color=c("#7c1730"), hjust=0, size=5) +
+  annotate("segment", 
+        x=8.6, xend=8.6, 
+        y= 0.5, yend= 1.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#7c1730") +
+    annotate("text", x=9, y=-0.5, label= "Increased in children", color=c("#004058"), hjust=1, size=5) +
+  annotate("segment", 
+        x=8.6, xend=8.6, 
+        y= -0.5, yend= -1.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#004058") +
+  scale_fill_manual(values=c("#004058","#7c1730")) +
+  coord_flip(xlim=c(1, 9), clip="off") +
+  scale_y_continuous(limits=c(-6,6), breaks=seq(-6,6,2)) +
+  theme(legend.position = "none",
+        plot.margin = margin(2, 2, 2, 2),
+        axis.text.y = element_text(face = "italic")) +
+  xlab("") + ylab("\nLog2 Fold Change")
+
+diff_expression_age
+
+
+```
+
+
+### Figure 3E: microbiome differential expression mirror bar
+
+
+```{r microbiome mirror bar}
+
+taxa_level <- microbiome %>%
+  group_by(sample_name, genus_tax_id) %>%
+  arrange(desc(nt_count)) %>%
+  slice_head() %>%
+  ungroup() %>%
+  filter(!is.na(name) & num_bact!=0) %>%
+  filter(genus_tax_id %in% c(1350, 286, 1279, 816, 838, 75984, 724, 475)) %>%
+  rename(orig_name=name) %>%
+  mutate(genus = case_when(genus_tax_id==1350 ~ "Enterococcus spp.",
+                           genus_tax_id==816 ~ "Bacteroides spp.",
+                           genus_tax_id==286 ~ "Pseudomonas spp.",
+                           genus_tax_id==75984 ~ "Mannheimia spp.",
+                           genus_tax_id==724 ~ "Haemophilus spp.",
+                           genus_tax_id==1279 ~ "Staphylococcus spp.",
+                           genus_tax_id==838 ~ "Prevotella spp.",
+                           genus_tax_id==475 ~ "Moraxella spp."))
+
+taxa_freq <- taxa_level %>%
+  select(genus, orig_name, age_cohort, sample_name, nt_rpm) %>%
+  group_by(genus, orig_name) %>%
+  summarise(n=n()) %>%
+  arrange(genus, desc(n))
+
+genus_count <- taxa_level %>% count(genus) %>% rename(total=n)
+
+taxa_names <- taxa_freq %>%
+  left_join(genus_count, by="genus") %>%
+  mutate(freq=n/total) %>%
+  mutate(name = case_when(str_detect(orig_name, 'uncultured') ~ paste("Other",genus),
+                          TRUE ~ orig_name))  %>%
+  filter(!str_detect(name, 'Other')) %>%
+  ungroup() %>%
+  arrange(genus, freq) %>%
+  mutate(order=row_number()) %>%
+  select(orig_name, order)
+  
+taxa_freq_age <- taxa_level %>%
+  select(genus, orig_name, age_cohort, sample_name, nt_rpm) %>%
+  right_join(taxa_names, by="orig_name") %>%
+  count(age_cohort, genus, orig_name, order) %>%
+  mutate(freq = case_when(age_cohort=="adult" ~ n/88,
+                          age_cohort=="peds" ~ (n/261)*(-1)),
+         genus = factor(genus, levels=c("Enterococcus spp.","Pseudomonas spp.", "Staphylococcus spp.",
+                                        "Bacteroides spp.", "Prevotella spp.", "Mannheimia spp.",
+                                        "Haemophilus spp.", "Moraxella spp.")))
+
+keep_names <- taxa_freq_age %>% filter(abs(freq) >=0.05) %>% select(orig_name) %>% distinct()
+keep_names <- taxa_freq_age %>% filter(n>1) %>% select(orig_name) %>% distinct()
+
+microbiome_bar <- ggplot(data=taxa_freq_age %>% 
+                           filter(orig_name %in% keep_names$orig_name) %>% 
+                           mutate(orig_name=case_when(orig_name=="[Haemophilus] ducreyi" ~ "Haemophilus ducreyi",
+                                                      TRUE ~ orig_name)) %>%
+                           mutate(new_name = case_when(str_detect(orig_name, 'Enterococcus') ~ gsub("Enterococcus", "E.", orig_name),
+                                                       str_detect(orig_name, 'Pseudomonas') ~ gsub("Pseudomonas", "P.", orig_name),
+                                                       str_detect(orig_name, 'Staphylococcus') ~ gsub("Staphylococcus", "S.", orig_name),
+                                                       str_detect(orig_name, 'Bacteroides') ~ gsub("Bacteroides", "B.", orig_name),
+                                                       str_detect(orig_name, 'Prevotella') ~ gsub("Prevotella", "P.", orig_name),
+                                                       str_detect(orig_name, 'Mannheimia') ~ gsub("Mannheimia", "M.", orig_name),
+                                                       str_detect(orig_name, 'Haemophilus') ~ gsub("Haemophilus", "H.", orig_name),
+                                                       str_detect(orig_name, 'Moraxella') ~ gsub("Moraxella", "M.", orig_name),
+                                                       TRUE ~ orig_name)) %>%
+                           mutate(labels = if_else(age_cohort=="peds", "", paste(" ",new_name))),
+       aes(x=reorder(new_name, -order), y=freq, group=genus, fill=genus, alpha=age_cohort)) +
+  scale_fill_viridis(discrete=TRUE) + 
+  geom_hline(aes(yintercept=0), linetype = "solid", color = "black") +
+  facet_grid(cols = vars(genus), scales = "free", space="free", switch = "y") +
+  scale_alpha_manual(values=c(1, 0.5)) +
+  guides(alpha="none", fill=guide_legend("", nrow = 2)) + 
+  geom_bar(stat="identity") + 
+  geom_text(aes(label = labels, angle=90, hjust = 0, fontface = "italic")) +
+  theme(panel.spacing = unit(0.3,"lines"),
+          axis.ticks.x = element_blank(),
+          axis.line.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.text.x = element_blank(),
+          strip.text.x = element_blank(),
+          legend.position = "top",
+          legend.text = element_text(size=12)) +
+  ylab("Frequency                   \n") + xlab("Bacterial microbiota") +
+  scale_y_continuous(limits=c(-0.5,1), breaks=seq(-0.5,0.5, by = 0.25), expand = expansion(mult=c(0,0.15)), labels=function(x) percent(abs(x))) +
+  coord_cartesian(clip="off")
+
+microbiome_bar
+
+
+```
+
+## Microbiome Figure 4
+
+### Figure 4A: microbiome log regression peds vs adult
+
+```{r logistic regression models}
+
+# forest plot of peds vs adults
+mult_forest_plot_data <- logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads + new_LRTI_onset_ind,
+                                              family = binomial(link = "logit"),
+                                              data = metadata %>% mutate(age_cohort=factor(age_cohort, levels = c("peds","adult")),
+                                                                         new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels =c("no LRTI","Indeterminate","CAP","HAP")))))
+
+
+res_plot <- as.data.frame(mult_forest_plot_data$table) %>%
+  rename(p.value=`P(Wald's test)`,
+         aOR=`adj. OR(95%CI)`) %>%
+  select(aOR, p.value) %>%
+  mutate(model= c("Age (adults vs children)","",
+                  "Bacterial abundance","",
+                  "Bacterial alpha diversity",
+                  "","    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI", ""),
+         estimate = format(round(as.numeric(str_extract(aOR, ".+?(?= ())")), digits=2), nsmall=2),
+         conf.low = format(round(as.numeric(gsub(".*\\((.*)\\,.*", "\\1", aOR)), digits=2), nsmall=2),
+         conf.high = format(round(as.numeric(gsub(".*,(.*)\\).*", "\\1", aOR)), digits=2),  nsmall=2)) %>%
+  filter(model!="") %>%
+  mutate(estimate_lab = case_when(!is.na(estimate) ~ paste0(estimate, " (", conf.low, "-", conf.high,")"),
+                                  TRUE ~ "           ---"),
+         p.value = case_when(p.value!="" ~ p.value,
+                             p.value=="" ~ " ---")) %>%
+  mutate(estimate_lab = case_when(estimate_lab=="  NA (  NA-  NA)" ~  "           ---",
+                                  TRUE ~ estimate_lab)) %>%
+  bind_rows(data.frame(model = "Characteristic", estimate_lab = "aOR (95% CI)", conf.low = NA, conf.high=NA,p.value="p-value")) %>%
+  bind_rows(data.frame(model = "LRTI Status", estimate_lab = "", conf.low = NA, conf.high=NA,p.value="")) %>%
+  mutate(estimate=as.numeric(estimate),
+         conf.low=as.numeric(conf.low),
+         conf.high=as.numeric(conf.high),
+         model = factor(model, c("Characteristic",
+                                 "Age (adults vs children)",
+                                 "Bacterial abundance","",
+                                 "Bacterial alpha diversity",
+                                 "LRTI Status",
+                                 "    No LRTI (ref)","    Indeterminate", "    CA-LRTI", "    HA-LRTI")))
+
+
+## plotting
+## ---------------------------
+# create forest plot on log scale (middle section of figure)
+p_mid <- ggplot(res_plot, aes(y = reorder(model, desc(model)))) + 
+  geom_point(aes(x=estimate), shape=15, size=3) +
+  geom_linerange(aes(xmin=conf.low, xmax=conf.high)) +
+  geom_vline(xintercept = 1, linetype="dashed") +
+  labs(x="adjusted odds ratio (aOR)", y="") +
+  coord_cartesian(ylim=c(1,9), xlim=c(0, 6)) +
+  scale_x_continuous(breaks = seq(0,6, by=1)) +
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y= element_blank(),
+        axis.text.y= element_blank(),
+        axis.title.y= element_blank())
+
+# left side of plot - aOR
+p_left <- ggplot(res_plot, aes(y = reorder(model,desc(model)))) + 
+  geom_text(aes(x=0, label=model), hjust=0, fontface = "bold", size=6) +
+  geom_text(aes(x=1, label=estimate_lab), hjust=0, fontface = ifelse(res_plot$estimate_lab == "aOR (95% CI)", "bold", "plain"), size=6) +
+  theme_void() +
+  coord_cartesian(xlim=c(0,2))
+
+# right side of plot - pvalues
+p_right <- ggplot(res_plot) +
+  geom_text(aes(x=0, y = reorder(model,desc(model)), label=p.value), hjust=0, fontface = ifelse(res_plot$p.value == "p-value", "bold", "plain"), size=6) +
+  theme_void() 
+
+
+# layout design (top, left, bottom, right)
+layout <- c(area(t = 0, l = 0, b = 30, r = 20), # left plot, starts at the top of the page (0) and goes 30 units down and 3 units to the right
+  area(t = 0, l = 18, b = 30, r = 28), # middle plot starts a little lower (t=1) because there's no title. starts 1 unit right of the left plot (l=4, whereas left plot is r=3), goes to the bottom of the page (30 units), and 6 units further over from the left plot (r=9 whereas left plot is r=3)
+  area(t = 0, l = 28, b = 30, r = 35)) # right most plot starts at top of page, begins where middle plot ends (l=9, and middle plot is r=9), goes to bottom of page (b=30), and extends two units wide (r=11)
+
+# final plot arrangement
+forest_plot <- p_left + p_mid + p_right + plot_layout(design = layout)
+
+
+```
+
+
+### Figure 4B: differential expression between those with AMR and those without
+
+```{r differential expression AMR_yn}
+
+#building countData matrix
+counts <- microbiome %>%
+  filter(!is.na(name) & num_bact!=0) %>%
+  rename(orig_name=name) %>%
+  mutate(name = gsub( " .*$", "", orig_name)) %>%
+  group_by(sample_name, genus_tax_id) %>%
+  summarise(sum_nt_count = sum(nt_count)) %>%
+  pivot_wider(id_cols=genus_tax_id, names_from=sample_name, values_from=sum_nt_count) %>%
+  mutate(name=as.character(genus_tax_id)) %>%
+  column_to_rownames("name") %>%
+  select(-genus_tax_id) %>%
+  mutate_if(is.numeric, ~replace_na(., 0))
+
+counts_dds <- counts[, sort(colnames(counts))]
+
+# counting the number of 0s per row and filtering out pathogens that are in >20% of all samples
+counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.8*(ncol(counts_dds))), ]
+
+counts_dds_matrix = as.matrix(counts_dds)
+
+metadata_dds <- metadata %>% filter(sample_name %in% colnames(counts_dds_matrix)) %>%
+  column_to_rownames("sample_name")
+metadata_dds <- metadata_dds[sort(rownames(metadata_dds)),] %>%
+  mutate(AMR_yn=factor(AMR_yn, levels=c(0,1)))
+
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) 
+
+#building DESeq object
+dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
+                              colData = metadata_dds,
+                              design = ~AMR_yn)
+
+c=counts(dds)[rowSums(counts(dds))>0,]
+
+dds=dds[rowSums(counts(dds))>=1,]
+dds$AMR_yn = relevel(dds$AMR_yn, ref = "0")
+dds=dds[,colSums(counts(dds))>=1]
+
+ds <- estimateSizeFactors(dds, type="poscounts")
+ds <- DESeq(ds, test="Wald", fitType="parametric")
+
+# Extract differential expression results
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_df = as.data.frame(res)
+
+sig.res <- res[res$padj<0.05,]
+taxa_sig = rownames(res[1:20, ]) # select bottom 20 with lowest p.adj values
+
+genus <- microbiome %>% select(genus_tax_id,name) %>% 
+  mutate(Genus=as.character(genus_tax_id), 
+         name=paste(gsub( " .*$", "", name ), "spp.")) %>% 
+  mutate(name = case_when(Genus=286 & name=="Candidatus spp." ~ "Pseudomonas spp.",
+                          TRUE ~ name)) %>%
+  select(-genus_tax_id) %>% distinct() %>%
+  filter(name!="uncultured spp.")
+
+sig.res_df <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>%
+  left_join(genus, by="Genus") %>%
+  select(-Genus) %>%
+  rename(Genus=name)
+
+diff_expression_AMR <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChange>=0 ~ "positive",
+                                                                log2FoldChange<0 ~ "negative")),
+                          aes(x=reorder(Genus,log2FoldChange), y=log2FoldChange, fill=color)) +
+  geom_bar(stat="identity", position="stack", width=0.6) + 
+  scale_fill_manual(values=c("#440154FF","#042333ff")) +
+  coord_flip(xlim=c(1, 7), clip="off") +
+  scale_y_continuous(limits=c(0,5.5), breaks=seq(0,5.5,1), expand = c(0,0)) +
+  theme(legend.position = "none",
+        plot.margin = margin(2, 2, 2, 2),
+        axis.text.y = element_text(face = "italic"),
+        axis.text.x = element_text()) +
+  xlab("") + ylab("Log2 Fold Change\n")
+
+diff_expression_AMR
+
+
+genus_list <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>% select("Genus") # to be used for the supplemental table 5
+
+```
+
+
+### Supplemental Table 5: logistic regression with all the differentially expressed genera
+
+```{r}
+
+#mNGS data
+mNGS_data <- microbiome %>% filter(as.character(genus_tax_id) %in% genus_list$Genus) %>%
+    mutate(Genus=as.character(genus_tax_id)) %>%
+    select(sample_name, Genus) %>% distinct() %>%
+    left_join(genus, by="Genus") %>%
+    mutate(count=1,
+           name=gsub( " .*$", "", name)) %>% 
+    pivot_wider(id_cols="sample_name", names_from="name", values_from ="count", values_fill=0)
+
+metadata_mNGS <- metadata %>%
+  select(sample_name, age_cohort, AMR_yn, sum_rpm_bact, SDI_bact_reads, new_LRTI_onset_ind) %>%
+  left_join(mNGS_data, by="sample_name") %>% 
+    mutate_if(is.numeric, ~replace_na(., 0))  %>%
+  mutate(new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","LRTI unknown onset","CAP","HAP")),
+         age_cohort = factor(age_cohort, levels=c("peds","adult")))
+
+
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads + Enterococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Bacteroides + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Pseudomonas + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Staphylococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Fusobacterium + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort+ sum_rpm_bact + SDI_bact_reads + Neisseria + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Prevotella + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+
+
+
+```
