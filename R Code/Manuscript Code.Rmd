@@ -1,7 +1,7 @@
 ---
-title: "The antibiotic resistance reservoir of the lung microbiome expands with age"
+title: "The antibiotic resistance reservoir of the lung microbiome expands with age in a population of critically ill patients"
 output: figures and tables for the manuscript
-date: "2023-09-05"
+date: "2023-12-04"
 ---
 
 ## Libraries
@@ -18,6 +18,7 @@ library(rstatix)
 library(patchwork)
 library(viridis)
 library(DESeq2)
+library(scales)
 
 diversity <- vegan::diversity
 rename <- dplyr::rename
@@ -65,14 +66,23 @@ theme_set(theme_mine())
 # main working files
 
 genecounts <- read.csv(".../Data/amrgenes.csv")
-
 metadata <- read.csv(".../Data/metadata.csv")
-
 microbiome <- read.csv(".../Data/microbiome.csv")
-
 
 ```
 
+## Demographics
+
+### Supplemental Table 2
+
+```{r Supp Table 1: p values for the Fig 1D}
+
+chisq.test(table(metadata$age_cohort, metadata$sex))
+chisq.test(table(metadata$age_cohort, metadata$raceeth))
+chisq.test(table(metadata$age_cohort, metadata$new_LRTI_onset_ind))
+chisq.test(data.frame(c(79,235), c(9,26))) # aggregate data available only
+
+```
 
 ## Resistome Figures
 
@@ -88,7 +98,7 @@ specimen_order <- genecounts %>%
   group_by(sample_name) %>%
   slice_head() %>%
   ungroup() %>%
-  arrange(desc(age_cohort), sample_pc, -num_AMR) %>% # agecohort used to be study_ord
+  arrange(desc(age_cohort), -num_AMR) %>% # agecohort used to be study_ord
   mutate(age_cohort_ord = row_number()) %>%
   select(sample_name, age_cohort_ord)
 
@@ -258,6 +268,8 @@ Fig1C_plot <- ggplot(data = Fig1C, aes(x=age_group, y=num_abx_class, color=age_c
                       legend.text = element_text(size=12))
 Fig1C_plot
 
+
+
 ```
 
 ### Figure 1D: frequency of presence of an AMR gene by class
@@ -393,17 +405,33 @@ Fig1D
 
 ```
 
+
+### Supplemental Table 2
+
+```{r Supp Table 2: p values for the Fig 1D}
+
+chisq.test(table(metadata$age_cohort, metadata$abx_agly))
+chisq.test(table(metadata$age_cohort, metadata$abx_bla))
+chisq.test(table(metadata$age_cohort, metadata$abx_phe))
+chisq.test(table(metadata$age_cohort, metadata$abx_flq))
+fisher.test(table(metadata$age_cohort, metadata$abx_fcyn))
+chisq.test(table(metadata$age_cohort, metadata$abx_mls))
+chisq.test(table(metadata$age_cohort, metadata$abx_tet))
+fisher.test(table(metadata$age_cohort, metadata$abx_ts))
+
+```
+
 ### Figure 1E: resistome beta diversity
 
 ```{r Fig 1E beta diversity}
 
-beta_div_metadata<- metadata %>%
+beta_div_metadata <- metadata %>%
   filter(AMR_yn==1) %>%
   select(sample_name, age_cohort) %>%
-  distinct()
+  distinct() %>% arrange(sample_name)
 
 beta_diversity_genes<- genecounts %>%
-  filter(AMR_yn==1) %>%
+  arrange(sample_name) %>% filter(AMR_yn==1) %>%
   select(sample_name, allele_name, total_reads, AMR_yn)  %>%
   pivot_wider(names_from = "allele_name", values_from = "total_reads") %>%
   mutate_if(is.numeric, ~replace_na(., 0)) %>%
@@ -439,7 +467,6 @@ amr_betadiv<-ggplot(plot %>% mutate(age_cohort=factor(age_cohort, levels=c("peds
   annotate("text", x=-1, y=-1.5, label=paste('PERMANOVA\np-value 0.003'), hjust = 0, size=6) + 
                 theme(legend.position="none")
 amr_betadiv
-
 
 ```
 
@@ -488,6 +515,7 @@ plot <- ggplot(plot_data, aes(x=age_group, y=freq, group=name, color=age_cohort)
   axis.title.y= element_text(size=8))
 
 plot
+
 
 ```
 
@@ -555,7 +583,7 @@ SDI_agegroup
 
 ### Supplemental Figure 3
 
-```{r SuppFig1 intubated mirror bar on Blas}
+```{r Supp Figure 3 intubated mirror bar on Blas}
 
 barplot_data_bla <- barplot_data %>%
   filter(abx_class=="Beta-Lactam") %>%
@@ -585,6 +613,51 @@ AMR_count_int_bla <- ggplot(barplot_data_bla %>% mutate(labels = if_else(age_coh
   scale_y_continuous(limits=c(-0.06,0.08), breaks=seq(-0.06,0.08, by = 0.02), expand = expansion(mult=c(0,0.15)), labels=function(x) percent(abs(x)))
 
 AMR_count_int_bla
+
+```
+
+
+### Supplemental Figure 4
+
+```{r Supp Figure 4 ARG abundance in patients with and without LRTIs}
+
+stat.test <- metadata %>%
+  mutate(LRTI_dpm = case_when(new_LRTI_onset_ind=="no LRTI" ~ "No LRTI",
+                              new_LRTI_onset_ind=="CAP" ~ "LRTI",
+                              new_LRTI_onset_ind=="HAP" ~ "LRTI",
+                              TRUE ~ NA_character_)) %>%
+  wilcox_test(sum_dpm ~ LRTI_dpm) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance("p") %>%
+  add_xy_position(x = "LRTI_dpm", dodge = 0.8) %>%
+  mutate(y.position = 1,
+         p.adj = round(p.adj, digits=2))
+
+
+LRTI_dpm <-ggplot(data = metadata %>%
+  mutate(LRTI_dpm = case_when(new_LRTI_onset_ind=="no LRTI" ~ "no LRTI",
+                              new_LRTI_onset_ind=="CAP" ~ "LRTI",
+                              new_LRTI_onset_ind=="HAP" ~ "LRTI",
+                              TRUE ~ NA_character_)) %>%
+    filter(!is.na(LRTI_dpm)),
+       aes(x=LRTI_dpm, y=sum_dpm +0.01)) +
+                geom_jitter(position = position_jitter(seed = 1, width = 0.1, height=0), alpha=0.6, size=3) +
+                geom_boxplot(alpha=0.5, width=0.4, outlier.shape = NA, fill=NA) + 
+                ylab("ARG dpm\n") + xlab("\nLRTI Status") +
+                scale_y_continuous(trans = log10_trans(),
+                        breaks = 10^(-2:1), #trans_breaks('log10', function(x) 10^x),
+                        labels = trans_format('log10', math_format(10^.x))) +
+                stat_pvalue_manual(stat.test, label = "p = {p.adj}", tip.length = 0, size=4) +
+                geom_hline(aes(yintercept=0)) + 
+                theme(axis.line.x = element_blank(), axis.ticks.x = element_blank(),
+                      legend.position = "top",
+                      legend.text=element_text(size=14),
+                      legend.direction="horizontal") 
+
+LRTI_dpm
+
+#ggsave("/Users/victoriachu/Documents/Research/AMR peds vs adults COVID/Results/Manuscript/AMRdpm_LRTI.pdf", LRTI_dpm, width=6, height=4)
+
 
 ```
 
@@ -775,7 +848,10 @@ logistic.display(glm(formula = AMR_yn ~ age + sex + raceeth + new_LRTI_onset_ind
                                               data = metadata %>% mutate(ETT_day_groups = factor(ETT_day_groups, levels=c("<=1","2","3")),
                                                                          new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","CAP","HAP")),
                                                                          sex = factor(sex, levels = c("Male", "Female")),
-                                                                         raceeth = factor(raceeth,levels=c("Non-Hispanic White", "Hispanic White", "Black or African American","Asian","Other")))))
+                                                                         age = case_when(age == ">89" ~ "90",
+                                                                                         TRUE ~ age), # for those >89 years old, represented as 90 years old for the model
+                                                                         raceeth = factor(raceeth,levels=c("Non-Hispanic White", "Hispanic White", "Black or African American","Asian","Other"))) %>%
+                       mutate(age = as.integer(age))))
 
 ```
 
@@ -827,7 +903,6 @@ bact_abundance_age <- ggplot(data = metadata %>% mutate(age_cohort = factor(age_
 
 bact_abundance_age
 
-
 ```
 
 
@@ -866,9 +941,10 @@ bSDI_agecat
 beta_div_metadata<- metadata %>%
   filter(num_bact!=0) %>%
   select(sample_name, age_cohort) %>%
-  distinct()
+  distinct() %>% arrange(sample_name)
 
 beta_diversity_genes<- microbiome %>%
+  arrange(sample_name) %>%
   filter(!is.na(name)) %>%
   select(sample_name, name, nt_count)  %>%
   pivot_wider(names_from = "name", values_from = "nt_count") %>% 
@@ -917,10 +993,10 @@ NMDS_int
 
 ```
 
-### Figure 3D: diff expression between children and adults
+### Figure 3D: diff expression genera between children and adults
 
 
-```{r differential expression by age}
+```{r differential expression genera by age}
 
 #building countData matrix
 counts <- microbiome %>%
@@ -937,7 +1013,7 @@ counts <- microbiome %>%
 
 counts_dds <- counts[, sort(colnames(counts))]
 
-# counting the number of 0s per row and filtering out pathogens that are in >20% of all samples
+# counting the number of 0s per row and retaining pathogens that are in >20% of all samples
 counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.8*(ncol(counts_dds))), ]
 
 counts_dds_matrix = as.matrix(counts_dds)
@@ -946,7 +1022,7 @@ metadata_dds <- metadata %>% filter(sample_name %in% colnames(counts_dds_matrix)
   column_to_rownames("sample_name")
 metadata_dds <- metadata_dds[sort(rownames(metadata_dds)),]
 
-all(rownames(metadata_dds) == colnames(counts_dds_matrix)) #this needs to be True!!! otherwise you will have mismatches
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) 
 
 #building DESeq object
 dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
@@ -1005,9 +1081,104 @@ diff_expression_age <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChan
 
 diff_expression_age
 
+genus<- microbiome %>%
+  filter(!is.na(name) & num_bact!=0) %>%
+  rename(orig_name=name) %>%
+  mutate(name = gsub( " .*$", "", orig_name)) %>% select(genus_tax_id, name) %>% distinct() %>%
+  mutate(genus_tax_id=as.character(genus_tax_id))
 
 ```
 
+
+### Supplemental Figure 5: diff expression taxa between children and adults
+
+
+```{r differential expression taxa by age}
+
+#building countData matrix
+counts <- microbiome %>%
+  mutate(name=case_when(name=="[Haemophilus] ducreyi" ~ "Haemophilus ducreyi",
+                                                      TRUE ~ name)) %>%
+  filter(!is.na(name) & num_bact!=0) %>%
+  rename(orig_name=name) %>%
+  mutate(name = gsub( " .*$", "", orig_name)) %>%
+  pivot_wider(id_cols=tax_id, names_from=sample_name, values_from=nt_count) %>%
+  mutate(name=as.character(tax_id)) %>%
+  column_to_rownames("name") %>%
+  select(-tax_id) %>%
+  mutate_if(is.numeric, ~replace_na(., 0))
+
+counts_dds <- counts[, sort(colnames(counts))]
+hist(rowSums(counts_dds!=0)/ncol(counts_dds))
+
+# counting the number of 0s per row and retaining pathogens that are in >20% of all samples
+counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.8*(ncol(counts_dds))), ]
+
+counts_dds_matrix = as.matrix(counts_dds)
+
+metadata_dds <- metadata %>% filter(sample_name %in% colnames(counts_dds_matrix)) %>%
+  column_to_rownames("sample_name")
+metadata_dds <- metadata_dds[sort(rownames(metadata_dds)),]
+
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) 
+
+#building DESeq object
+dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
+                              colData = metadata_dds,
+                              design = ~age_cohort)
+
+c=counts(dds)[rowSums(counts(dds))>0,]
+hist(log(rowSums(c)),breaks=200,freq=FALSE)
+
+dds=dds[rowSums(counts(dds))>=1,]
+dds$age_cohort = relevel(dds$age_cohort, ref = "peds")
+dds=dds[,colSums(counts(dds))>=1]
+
+ds <- estimateSizeFactors(dds, type="poscounts")
+ds <- DESeq(ds, test="Wald", fitType="parametric")
+
+# Extract differential expression results
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_df = as.data.frame(res)
+
+sig.res <- res[res$padj<0.05,]
+#taxa_sig = rownames(res[1:20, ]) # select bottom 20 with lowest p.adj values
+
+#hist(sig.res$log2FoldChange)
+
+sig.res_df <- as(sig.res, "data.frame") %>% rownames_to_column("Taxa") %>%
+  mutate(Taxa = case_when(Taxa=="480" ~ "Moraxella catarrhalis",
+                           Taxa=="75985" ~ "Mannheimia haemolytica",
+                           Taxa=="747" ~ "Pasteurella multocida",
+                           Taxa=="727" ~ "Haemophilus influenzae"))
+
+diff_abundance <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChange>=0 ~ "positive",
+                                                                log2FoldChange<0 ~ "negative")),
+                          aes(x=reorder(Taxa,log2FoldChange), y=log2FoldChange, fill=color)) +
+  geom_bar(stat="identity", position="stack") + 
+  annotate("text", x=5, y=0.5, label= "Increased in adults", color=c("#7c1730"), hjust=0, size=5) +
+  annotate("segment", 
+        x=4.6, xend=4.6, 
+        y= 0.5, yend= 4, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#7c1730") +
+    annotate("text", x=5, y=-0.5, label= "Increased in children", color=c("#004058"), hjust=1, size=5) +
+  annotate("segment", 
+        x=4.6, xend=4.6, 
+        y= -0.5, yend= -4, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#004058") +
+  scale_fill_manual(values=c("#004058","#7c1730")) +
+  coord_flip(xlim=c(1, 5), clip="off") +
+  scale_y_continuous(limits=c(-12,6), breaks=seq(-12,6,2)) +
+  theme(legend.position = "none",
+        plot.margin = margin(2, 2, 2, 2),
+        axis.text.y = element_text(face = "italic")) +
+  xlab("") + ylab("\nLog2 Fold Change")
+
+diff_abundance
+
+```
 
 ### Figure 3E: microbiome differential expression mirror bar
 
@@ -1063,7 +1234,8 @@ taxa_freq_age <- taxa_level %>%
 keep_names <- taxa_freq_age %>% filter(abs(freq) >=0.05) %>% select(orig_name) %>% distinct()
 keep_names <- taxa_freq_age %>% filter(n>1) %>% select(orig_name) %>% distinct()
 
-microbiome_bar <- ggplot(data=taxa_freq_age %>% 
+
+taxa_freq_age <- taxa_freq_age %>% 
                            filter(orig_name %in% keep_names$orig_name) %>% 
                            mutate(orig_name=case_when(orig_name=="[Haemophilus] ducreyi" ~ "Haemophilus ducreyi",
                                                       TRUE ~ orig_name)) %>%
@@ -1076,7 +1248,12 @@ microbiome_bar <- ggplot(data=taxa_freq_age %>%
                                                        str_detect(orig_name, 'Haemophilus') ~ gsub("Haemophilus", "H.", orig_name),
                                                        str_detect(orig_name, 'Moraxella') ~ gsub("Moraxella", "M.", orig_name),
                                                        TRUE ~ orig_name)) %>%
-                           mutate(labels = if_else(age_cohort=="peds", "", paste(" ",new_name))),
+                           mutate(labels = if_else(age_cohort=="peds" & !(new_name %in% c("B. eggerthii","B. intestinalis","B. stercoris",
+                                                                                          "E. columbae","M. granulomatis","P. nanceiensis",
+                                                                                          "P. psychrotolerans","S. argenteus",
+                                                                                          "P. versuta","S. pettenkoferi")), "", paste(" ",new_name)))
+
+microbiome_bar <- ggplot(data=taxa_freq_age,
        aes(x=reorder(new_name, -order), y=freq, group=genus, fill=genus, alpha=age_cohort)) +
   scale_fill_viridis(discrete=TRUE) + 
   geom_hline(aes(yintercept=0), linetype = "solid", color = "black") +
@@ -1102,9 +1279,9 @@ microbiome_bar
 
 ```
 
-## Microbiome Figure 4
+## Resistome with microbiome
 
-### Figure 4A: microbiome log regression peds vs adult
+### Figure 4: microbiome log regression peds vs adult
 
 ```{r logistic regression models}
 
@@ -1112,7 +1289,8 @@ microbiome_bar
 mult_forest_plot_data <- logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads + new_LRTI_onset_ind,
                                               family = binomial(link = "logit"),
                                               data = metadata %>% mutate(age_cohort=factor(age_cohort, levels = c("peds","adult")),
-                                                                         new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels =c("no LRTI","Indeterminate","CAP","HAP")))))
+                                                                         new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels =c("no LRTI","Indeterminate","CAP","HAP")),
+                                                                          sum_rpm_bact = log10(sum_rpm_bact +0.01))))
 
 
 res_plot <- as.data.frame(mult_forest_plot_data$table) %>%
@@ -1186,7 +1364,7 @@ forest_plot <- p_left + p_mid + p_right + plot_layout(design = layout)
 ```
 
 
-### Figure 4B: differential expression between those with AMR and those without
+### Figure 5: differential expression between those with AMR and those without
 
 ```{r differential expression AMR_yn}
 
@@ -1274,11 +1452,12 @@ genus_list <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>% sele
 ```
 
 
-### Supplemental Table 5: logistic regression with all the differentially expressed genera
+### Supplemental Table 6: logistic regression with all the differentially expressed genera
 
-```{r}
+```{r Supp Table 6: binary age}
 
 #mNGS data
+
 mNGS_data <- microbiome %>% filter(as.character(genus_tax_id) %in% genus_list$Genus) %>%
     mutate(Genus=as.character(genus_tax_id)) %>%
     select(sample_name, Genus) %>% distinct() %>%
@@ -1288,21 +1467,40 @@ mNGS_data <- microbiome %>% filter(as.character(genus_tax_id) %in% genus_list$Ge
     pivot_wider(id_cols="sample_name", names_from="name", values_from ="count", values_fill=0)
 
 metadata_mNGS <- metadata %>%
-  select(sample_name, age_cohort, AMR_yn, sum_rpm_bact, SDI_bact_reads, new_LRTI_onset_ind) %>%
+  select(sample_name, age_cohort, age, AMR_yn, sum_rpm_bact, SDI_bact_reads, new_LRTI_onset_ind) %>%
+  mutate(age = case_when(age == ">89" ~ "90",
+                         TRUE ~ age)) %>% # for those >89 years old, represented as 90 years old for the model)
+  mutate(age = as.integer(age)) %>% 
   left_join(mNGS_data, by="sample_name") %>% 
     mutate_if(is.numeric, ~replace_na(., 0))  %>%
   mutate(new_LRTI_onset_ind = factor(new_LRTI_onset_ind, levels=c("no LRTI","Indeterminate","LRTI unknown onset","CAP","HAP")),
          age_cohort = factor(age_cohort, levels=c("peds","adult")))
 
 
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads + Enterococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Bacteroides + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Pseudomonas + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Staphylococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Fusobacterium + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort+ sum_rpm_bact + SDI_bact_reads + Neisseria + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
-logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Prevotella + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads + Enterococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Bacteroides + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Pseudomonas + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Staphylococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Fusobacterium + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort+ sum_rpm_bact + SDI_bact_reads + Neisseria + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age_cohort + sum_rpm_bact + SDI_bact_reads+ Prevotella + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
 
+```
+
+
+### Supplemental Table 7: cont age logistic regression with all the differentially expressed genera
+
+```{r Supp Table 7: continuous age}
+
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads + Enterococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads+ Bacteroides + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads+ Pseudomonas + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads+ Staphylococcus + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads+ Fusobacterium + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age+ sum_rpm_bact + SDI_bact_reads + Neisseria + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
+logistic.display(glm(formula = AMR_yn ~ age + sum_rpm_bact + SDI_bact_reads+ Prevotella + new_LRTI_onset_ind, family = binomial(link = "logit"), data = metadata_mNGS %>% mutate(sum_rpm_bact = log(sum_rpm_bact +0.01))))
 
 
 ```
