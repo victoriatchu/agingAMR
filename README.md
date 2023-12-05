@@ -1,7 +1,9 @@
 # The antibiotic resistance reservoir of the lung microbiome expands with age
 
-Repository for initial submission
-
+# Repository for manuscript submission: 
+Title: 'The antibiotic resistance reservoir of the lung microbiome expands with age in a population of critically ill patients'
+Authors: Victoria T. Chu, Alexandra Tsitsiklis, Eran Mick, Lilliam Ambroggio, Katrina L. Kalantar, Abigail Glascock, Christina M. Osborne, Brandie D. Wagner, Michael A. Matthay, Joseph L. DeRisi, Carolyn S. Calfee, Peter M. Mourani, Charles R. Langelier
+  
 
 ## Software dependencies
 
@@ -15,6 +17,8 @@ For the development of the code in this repository we made use of the following 
 - `patchwork` version 1.1.2
 - `viridis` version 0.6.2
 - `DESeq2` version 1.36.0
+- `scales` version 1.2.1
+
 
 There is no need for non-standard hardware. 
 
@@ -27,7 +31,8 @@ times may vary depending on the specification of your computer and the OS.
 RStudio version 2023.6.0.421 was used to write and run the 'Manuscript Code.Rmd' file.
 
 ## Data
-Data needed to run this code are available from a public repository on Gitthub (https://github.com/victoriatchu/agingAMR).
+Data needed to run this code are available from a public repository on Github (https://github.com/victoriatchu/agingAMR).
+Source data to directly create the figures and tables are also available (as 'Source Data.csv') on the Github repository.
 
 ## Demo
 
@@ -35,8 +40,7 @@ Save data in any directory in your desktop. Then make sure all `.csv` files are 
 
 ### Expected output
 
-After running all files you should get an output of the figures and tables in the manuscript.
-
+After running all files you should get an output of the figures and tables in the manuscript and the Supplemental Information.
 
 ## Instructions for use
 
